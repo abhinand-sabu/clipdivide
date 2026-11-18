@@ -36,7 +36,7 @@ Screenshots show the native Android app running in an emulator with generated te
 
 ## Download and install
 
-1. Download `ClipDivide-v1.2.0.apk` from [GitHub Releases](https://github.com/abhinand-sabu/clipdivide-android-video-splitter/releases/tag/v1.2.0).
+1. Download `ClipDivide-v1.2.0.apk` from [GitHub Releases](https://github.com/abhinand-sabu/clipdivide/releases/tag/v1.2.0).
 2. Open the APK on an Android 10 or newer device. Android may ask you to allow installation from the app you used to open it.
 3. Launch ClipDivide and choose your source video.
 
