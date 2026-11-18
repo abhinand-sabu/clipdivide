@@ -8,7 +8,7 @@
 
 ClipDivide is an offline Android video cutter built for a simple workflow. Choose a video, split by clip count, duration, approximate file size or custom timestamps, then save your clips with their original encoded video and audio.
 
-[**Download the Android APK**](https://github.com/abhinand-sabu/clipdivide-android-video-splitter/releases/download/v1.2.0/ClipDivide-v1.2.0.apk) · [Release notes](https://github.com/abhinand-sabu/clipdivide-android-video-splitter/releases/tag/v1.2.0) · [How it works](docs/ARCHITECTURE.md) · [Report an issue](https://github.com/abhinand-sabu/clipdivide-android-video-splitter/issues)
+[**Download the Android APK**](https://github.com/abhinand-sabu/clipdivide/releases/download/v1.2.0/ClipDivide-v1.2.0.apk) · [Release notes](https://github.com/abhinand-sabu/clipdivide/releases/tag/v1.2.0) · [How it works](docs/ARCHITECTURE.md) · [Report an issue](https://github.com/abhinand-sabu/clipdivide/issues)
 
 
 ## Screenshots
@@ -99,8 +99,8 @@ Open the repository in Android Studio, or use the included Gradle Wrapper.
 The project uses JDK 25 for Gradle, Java 17 source compatibility, Android Gradle Plugin 9.5.1, Gradle 9.6.0, compile SDK 37 and target SDK 36. Install Android SDK platform `android-37.0` and build tools `36.0.0`.
 
 ```sh
-git clone https://github.com/abhinand-sabu/clipdivide-android-video-splitter.git
-cd clipdivide-android-video-splitter
+git clone https://github.com/abhinand-sabu/clipdivide.git
+cd clipdivide
 ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
