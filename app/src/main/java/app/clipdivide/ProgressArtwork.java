@@ -2,14 +2,21 @@ package app.clipdivide;
 
 import android.animation.ValueAnimator;
 import android.content.Context;
-import android.graphics.*;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.PathMeasure;
+import android.graphics.RectF;
+import android.graphics.Typeface;
 import android.view.View;
 import android.view.animation.DecelerateInterpolator;
 
 /** An accessible progress ring that transforms into a drawn checkmark on completion. */
 final class ProgressArtwork extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private float progress, reveal;
+    private final RectF arcBounds = new RectF();
+    private float targetProgress, displayProgress, reveal;
     private boolean complete;
     private ValueAnimator animation;
 
@@ -19,13 +26,14 @@ final class ProgressArtwork extends View {
     }
 
     void progress(int value) {
-        progress = Math.max(progress, value);
+        targetProgress = Math.max(targetProgress, value);
         invalidate();
     }
 
     void complete(boolean animate) {
         complete = true;
-        progress = 100;
+        targetProgress = 100;
+        displayProgress = 100;
         if (!animate || !ValueAnimator.areAnimatorsEnabled()) {
             reveal = 1;
             invalidate();
@@ -55,18 +63,36 @@ final class ProgressArtwork extends View {
                 x = getWidth() / 2f,
                 y = getHeight() / 2f,
                 radius = size * .36f;
+
+        if (!complete && Math.abs(targetProgress - displayProgress) > 0.2f) {
+            displayProgress += (targetProgress - displayProgress) * 0.25f;
+            postInvalidateOnAnimation();
+        } else if (!complete) {
+            displayProgress = targetProgress;
+        }
+
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(size * .035f);
         paint.setStrokeCap(Paint.Cap.ROUND);
         paint.setColor(Color.rgb(49, 89, 75));
         canvas.drawCircle(x, y, radius, paint);
+
+        arcBounds.set(x - radius, y - radius, x + radius, y + radius);
         paint.setColor(Color.rgb(216, 247, 117));
-        canvas.drawArc(
-                new RectF(x - radius, y - radius, x + radius, y + radius),
-                -90,
-                complete ? 360 : Math.max(3, progress * 3.6f),
-                false,
-                paint);
+        if (!complete && displayProgress < 1f && ValueAnimator.areAnimatorsEnabled()) {
+            float sweepAngle = 55f;
+            float startAngle = ((System.currentTimeMillis() % 1200L) / 1200f) * 360f - 90f;
+            canvas.drawArc(arcBounds, startAngle, sweepAngle, false, paint);
+            postInvalidateOnAnimation();
+        } else {
+            canvas.drawArc(
+                    arcBounds,
+                    -90,
+                    complete ? 360 : Math.max(4, displayProgress * 3.6f),
+                    false,
+                    paint);
+        }
+
         if (complete) {
             Path check = new Path();
             check.moveTo(x - radius * .43f, y);
@@ -96,7 +122,7 @@ final class ProgressArtwork extends View {
             paint.setTextSize(size * .18f);
             paint.setTextAlign(Paint.Align.CENTER);
             canvas.drawText(
-                    Math.round(progress) + "%",
+                    Math.round(displayProgress) + "%",
                     x,
                     y - (paint.ascent() + paint.descent()) / 2,
                     paint);

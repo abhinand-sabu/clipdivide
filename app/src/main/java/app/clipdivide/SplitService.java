@@ -54,7 +54,7 @@ public final class SplitService extends Service {
                         PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         notification =
                 new Notification.Builder(this, "export")
-                        .setSmallIcon(android.R.drawable.stat_sys_upload)
+                        .setSmallIcon(R.drawable.ic_stat_split)
                         .setContentTitle("ClipDivide")
                         .setContentText("Preparing your clips")
                         .setContentIntent(open)
@@ -81,15 +81,36 @@ public final class SplitService extends Service {
         Uri input = Uri.parse(intent.getStringExtra("input"));
         Uri folder = Uri.parse(intent.getStringExtra("folder"));
         long[] boundaries = intent.getLongArrayExtra("boundaries");
+        int mode = intent.getIntExtra("mode", 0);
         int count = intent.getIntExtra("count", 5);
+        double durationSec = intent.getDoubleExtra("durationSec", 60);
+        double sizeMb = intent.getDoubleExtra("sizeMb", 100);
+        long[] cuts = intent.getLongArrayExtra("cuts");
         new Thread(
                         () -> {
                             try {
-                                SplitEngine.Source source = SourceCache.load(this, input);
-                                SplitEngine.Plan plan =
-                                        boundaries == null
-                                                ? SplitEngine.plan(source, count)
-                                                : SplitEngine.restorePlan(source, boundaries);
+                                boolean wasCached = SourceCache.loadIfCached(this, input) != null;
+                                SplitEngine.Source source =
+                                        SourceCache.importVideo(
+                                                this,
+                                                input,
+                                                cancellation,
+                                                (p, msg) ->
+                                                        progress(
+                                                                wasCached ? p : Math.round(p * 0.2f),
+                                                                msg));
+                                SplitEngine.Plan plan;
+                                if (boundaries != null) {
+                                    plan = SplitEngine.restorePlan(source, boundaries);
+                                } else if (mode == 1) {
+                                    plan = SplitEngine.planDuration(source, durationSec);
+                                } else if (mode == 2) {
+                                    plan = SplitEngine.planSize(source, sizeMb);
+                                } else if (mode == 3 && cuts != null) {
+                                    plan = SplitEngine.planCuts(source, cuts);
+                                } else {
+                                    plan = SplitEngine.plan(source, count);
+                                }
                                 getSharedPreferences("job", 0)
                                         .edit()
                                         .putString("folder", folder.toString())
@@ -97,6 +118,8 @@ public final class SplitService extends Service {
                                         .putInt("count", plan.count())
                                         .putLong("started", System.currentTimeMillis())
                                         .apply();
+                                int base = wasCached ? 0 : 20;
+                                double span = wasCached ? 1.0 : 0.8;
                                 List<Uri> outputs =
                                         SplitEngine.export(
                                                 this,
@@ -104,7 +127,10 @@ public final class SplitService extends Service {
                                                 folder,
                                                 plan,
                                                 cancellation,
-                                                this::progress);
+                                                (p, msg) ->
+                                                        progress(
+                                                                base + (int) Math.round(p * span),
+                                                                msg));
                                 StringBuilder saved = new StringBuilder();
                                 for (Uri output : outputs) saved.append(output).append('\n');
                                 getSharedPreferences("job", 0)
@@ -123,7 +149,7 @@ public final class SplitService extends Service {
                                                 ? "The video could not be split."
                                                 : error.getMessage());
                             } finally {
-                                if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+                                releaseWakeLock();
                                 running = false;
                                 stopForeground(STOP_FOREGROUND_REMOVE);
                                 stopSelf();
@@ -134,17 +160,27 @@ public final class SplitService extends Service {
         return START_NOT_STICKY;
     }
 
+    private synchronized void releaseWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) {
+            try {
+                wakeLock.release();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
     private void progress(int percent, String message) {
         long now = SystemClock.elapsedRealtime();
         if (now - lastUpdate < 400) return;
         lastUpdate = now;
-        save("running", percent, message);
+        int clamped = Math.max(0, Math.min(99, percent));
+        save("running", clamped, message);
         getSystemService(NotificationManager.class)
                 .notify(
                         ID,
                         notification
                                 .setContentText(message)
-                                .setProgress(100, percent, percent == 0)
+                                .setProgress(100, clamped, clamped == 0)
                                 .build());
     }
 
@@ -162,6 +198,9 @@ public final class SplitService extends Service {
     @Override
     public void onTimeout(int startId, int fgsType) {
         if (cancellation != null) cancellation.cancel();
+        releaseWakeLock();
+        save("error", 0, "Export timed out after the system limit.");
+        running = false;
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
     }
@@ -169,6 +208,7 @@ public final class SplitService extends Service {
     @Override
     public void onDestroy() {
         if (cancellation != null) cancellation.cancel();
+        releaseWakeLock();
         super.onDestroy();
     }
 }

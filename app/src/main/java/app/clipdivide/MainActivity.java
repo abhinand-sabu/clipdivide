@@ -48,17 +48,23 @@ public final class MainActivity extends Activity {
             error;
     private EditText parameter;
     private Button pick, split, folderButton, previewButton;
+    private ImageView thumbnail;
+    private android.graphics.Bitmap thumbBitmap;
     private ClipTimeline timeline;
     private ProgressArtwork artwork;
     private TextView exportTitle, exportStatus, exportTime;
     private Button cancel;
-    private final Runnable poll =
+    private final Runnable elapsedTick =
             new Runnable() {
                 public void run() {
-                    refreshJob();
-                    handler.postDelayed(this, 500);
+                    if ("running".equals(screen)) {
+                        updateElapsedText();
+                        handler.postDelayed(this, 1000);
+                    }
                 }
             };
+    private final SharedPreferences.OnSharedPreferenceChangeListener jobListener =
+            (prefs, key) -> runOnUiThread(this::refreshJob);
 
     @Override
     public void onCreate(Bundle state) {
@@ -66,6 +72,10 @@ public final class MainActivity extends Activity {
         config = getSharedPreferences("config", 0);
         job = getSharedPreferences("job", 0);
         if (config.contains("folder")) folder = Uri.parse(config.getString("folder", ""));
+        if (state != null && state.containsKey("input")) {
+            String savedInput = state.getString("input");
+            if (savedInput != null && !savedInput.isEmpty()) input = Uri.parse(savedInput);
+        }
         mode = Math.max(0, Math.min(3, config.getInt("mode", 0)));
         for (int i = 0; i < 4; i++) values[i] = config.getString("value" + i, values[i]);
         getWindow()
@@ -105,6 +115,7 @@ public final class MainActivity extends Activity {
         else if (SplitService.running) showExport(false, false);
         else {
             showEditor();
+            if (input != null && source == null) inspect();
         }
     }
 
@@ -179,13 +190,31 @@ public final class MainActivity extends Activity {
         brand(editor, false);
         LinearLayout video = card(editor, 24);
         smallLabel(video, "SOURCE VIDEO");
+        LinearLayout videoHeader = new LinearLayout(this);
+        videoHeader.setGravity(Gravity.CENTER_VERTICAL);
+        thumbnail = new ImageView(this);
+        thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        thumbnail.setBackground(shape(PAPER, 12, 0xffDAE3D9));
+        thumbnail.setClipToOutline(true);
+        if (thumbBitmap != null) {
+            thumbnail.setImageBitmap(thumbBitmap);
+            thumbnail.setVisibility(View.VISIBLE);
+        } else {
+            thumbnail.setVisibility(View.GONE);
+        }
+        LinearLayout.LayoutParams thumbParams = new LinearLayout.LayoutParams(dp(56), dp(56));
+        thumbParams.rightMargin = dp(14);
+        videoHeader.addView(thumbnail, thumbParams);
+        LinearLayout videoMeta = column();
         fileName = text(source == null ? "Choose your video" : source.name, 19, INK);
         fileName.setTypeface(null, Typeface.BOLD);
         fileName.setMaxLines(2);
         fileName.setEllipsize(TextUtils.TruncateAt.END);
-        add(video, fileName, 10);
+        videoMeta.addView(fileName);
         fileInfo = text(source == null ? "H.264 or H.265 · AAC audio" : "", 13, MUTED);
-        add(video, fileInfo, 6);
+        add(videoMeta, fileInfo, 4);
+        videoHeader.addView(videoMeta, new LinearLayout.LayoutParams(0, -2, 1));
+        add(video, videoHeader, 10);
         pick = button(source == null ? "Choose video" : "Change video", false, false);
         add(video, pick, 16);
         pick.setOnClickListener(
@@ -207,6 +236,16 @@ public final class MainActivity extends Activity {
             for (int col = 0; col < 2; col++) {
                 int index = row * 2 + col;
                 Button option = button(modeNames[index], false, false);
+                option.setAccessibilityDelegate(
+                        new View.AccessibilityDelegate() {
+                            @Override
+                            public void onInitializeAccessibilityNodeInfo(
+                                    View host, android.view.accessibility.AccessibilityNodeInfo info) {
+                                super.onInitializeAccessibilityNodeInfo(host, info);
+                                info.setCheckable(true);
+                                info.setChecked(host.isSelected());
+                            }
+                        });
                 modeButtons[index] = option;
                 LinearLayout.LayoutParams cell = new LinearLayout.LayoutParams(0, dp(48), 1);
                 if (col == 1) cell.leftMargin = dp(8);
@@ -258,8 +297,20 @@ public final class MainActivity extends Activity {
         previewButton = button("View clip times", false, false);
         add(options, previewButton, 12);
         previewButton.setOnClickListener(view -> showTimes());
-        folderButton = button("Choose output folder", false, false);
-        add(editor, folderButton, 16);
+        LinearLayout outputCard = card(editor, 14);
+        smallLabel(outputCard, "OUTPUT FOLDER");
+        folderLabel =
+                text(
+                        folder == null
+                                ? "Choose a local folder with room for your exported clips."
+                                : folderName(folder),
+                        14,
+                        folder == null ? MUTED : INK);
+        if (folder != null) folderLabel.setTypeface(null, Typeface.BOLD);
+        add(outputCard, folderLabel, 10);
+        folderButton =
+                button(folder == null ? "Choose output folder" : "Change output folder", false, false);
+        add(outputCard, folderButton, 14);
         folderButton.setOnClickListener(
                 view ->
                         startActivityForResult(
@@ -270,14 +321,6 @@ public final class MainActivity extends Activity {
                                                         | Intent
                                                                 .FLAG_GRANT_PERSISTABLE_URI_PERMISSION),
                                 11));
-        folderLabel =
-                text(
-                        folder == null
-                                ? "Use a local folder with room for your exported clips."
-                                : folderName(folder),
-                        12,
-                        MUTED);
-        add(editor, folderLabel, 6);
         error = text("", 13, 0xffA33C32);
         add(editor, error, 12);
         LinearLayout footer = column();
@@ -314,10 +357,13 @@ public final class MainActivity extends Activity {
         parameter.setInputType(
                 mode == 3
                         ? android.text.InputType.TYPE_CLASS_TEXT
+                                | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
                         : android.text.InputType.TYPE_CLASS_NUMBER
                                 | (mode == 0
                                         ? 0
                                         : android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL));
+        parameter.setSingleLine(mode != 3);
+        parameter.setMaxLines(mode == 3 ? 4 : 1);
         parameter.setFilters(
                 new InputFilter[] {new InputFilter.LengthFilter(mode == 3 ? 16000 : 9)});
         parameter.setHint(mode == 3 ? "00:30, 01:20" : "");
@@ -344,28 +390,26 @@ public final class MainActivity extends Activity {
         inspecting = true;
         source = null;
         plan = null;
+        thumbBitmap = null;
+        if (thumbnail != null) {
+            thumbnail.setImageDrawable(null);
+            thumbnail.setVisibility(View.GONE);
+        }
         fileName.setText("Opening video…");
         fileInfo.setText("Reading video information");
         updatePlan();
         worker.execute(
                 () -> {
                     try {
+                        SplitEngine.Source cached = SourceCache.loadIfCached(this, chosen);
                         SplitEngine.Source imported =
-                                SourceCache.importVideo(
-                                        this,
-                                        chosen,
-                                        current,
-                                        (p, message) ->
-                                                runOnUiThread(
-                                                        () -> {
-                                                            if (current == inspection
-                                                                    && "editor".equals(screen))
-                                                                fileInfo.setText(message);
-                                                        }));
+                                cached != null ? cached : SplitEngine.probe(this, chosen);
+                        android.graphics.Bitmap loadedThumb = loadThumbnail(chosen);
                         runOnUiThread(
                                 () -> {
                                     if (current != inspection || isDestroyed()) return;
                                     source = imported;
+                                    thumbBitmap = loadedThumb;
                                     inspecting = false;
                                     if ("editor".equals(screen)) {
                                         showSource();
@@ -387,14 +431,50 @@ public final class MainActivity extends Activity {
                 });
     }
 
+    private android.graphics.Bitmap loadThumbnail(Uri uri) {
+        android.media.MediaMetadataRetriever retriever = new android.media.MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(this, uri);
+            int target = dp(112);
+            if (Build.VERSION.SDK_INT >= 27) {
+                return retriever.getScaledFrameAtTime(
+                        0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, target, target);
+            }
+            return retriever.getFrameAtTime(0);
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            try {
+                retriever.release();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
     private void showSource() {
+        if (thumbnail != null) {
+            if (thumbBitmap != null) {
+                thumbnail.setImageBitmap(thumbBitmap);
+                thumbnail.setVisibility(View.VISIBLE);
+            } else {
+                thumbnail.setVisibility(View.GONE);
+            }
+        }
         fileName.setText(source.name);
-        fileInfo.setText(
+        String info =
                 SplitEngine.time(source.durationUs)
                         + "  ·  "
                         + size(source.bytes)
                         + "  ·  "
-                        + (source.codecs.contains("video/hevc") ? "H.265" : "H.264"));
+                        + (source.codecs.contains("video/hevc") ? "H.265" : "H.264");
+        if (source.skippedTracks > 0)
+            info +=
+                    "  ·  "
+                            + source.skippedTracks
+                            + (source.skippedTracks == 1
+                                    ? " metadata track omitted"
+                                    : " metadata tracks omitted");
+        fileInfo.setText(info);
         pick.setText("Change video");
     }
 
@@ -406,18 +486,35 @@ public final class MainActivity extends Activity {
             previewTitle.setText(inspecting ? "Preparing your video" : "Preview your clips");
             previewNote.setText(
                     inspecting
-                            ? "Cut points are checked once when you import."
+                            ? "Reading video metadata."
                             : "Choose a video to see its split preview.");
         } else
             try {
-                if (mode == 0) plan = SplitEngine.plan(source, Integer.parseInt(value));
-                if (mode == 1) plan = SplitEngine.planDuration(source, Double.parseDouble(value));
-                if (mode == 2) plan = SplitEngine.planSize(source, Double.parseDouble(value));
-                if (mode == 3) {
-                    String[] parts = value.split(",", -1);
-                    long[] cuts = new long[parts.length];
-                    for (int i = 0; i < parts.length; i++) cuts[i] = parseTime(parts[i]);
-                    plan = SplitEngine.planCuts(source, cuts);
+                boolean exact = source.hasKeys();
+                if (mode == 0) {
+                    int count = Integer.parseInt(value);
+                    plan =
+                            exact
+                                    ? SplitEngine.plan(source, count)
+                                    : SplitEngine.estimateCount(source, count);
+                } else if (mode == 1) {
+                    double seconds = Double.parseDouble(value);
+                    plan =
+                            exact
+                                    ? SplitEngine.planDuration(source, seconds)
+                                    : SplitEngine.estimateDuration(source, seconds);
+                } else if (mode == 2) {
+                    double megabytes = Double.parseDouble(value);
+                    plan =
+                            exact
+                                    ? SplitEngine.planSize(source, megabytes)
+                                    : SplitEngine.estimateSize(source, megabytes);
+                } else if (mode == 3) {
+                    long[] cuts = parseCuts(value);
+                    plan =
+                            exact
+                                    ? SplitEngine.planCuts(source, cuts)
+                                    : SplitEngine.estimateCuts(source, cuts);
                 }
                 long minimum = Long.MAX_VALUE, maximum = 0;
                 double worst = 0, ideal = (double) source.durationUs / plan.count();
@@ -427,22 +524,27 @@ public final class MainActivity extends Activity {
                     maximum = Math.max(maximum, length);
                     worst = Math.max(worst, Math.abs(length - ideal) / 1e6);
                 }
-                previewTitle.setText(plan.count() + " clips · original quality");
+                previewTitle.setText(
+                        (plan.estimated ? "~" : "") + plan.count() + " clips · original quality");
                 String note = length(minimum) + "–" + length(maximum) + " each";
-                if (mode == 0 || mode == 2)
-                    note +=
-                            String.format(
-                                    Locale.US, "\nLargest variation from average  %.2f s", worst);
-                if (mode == 3) {
-                    double snap = 0;
-                    String[] times = value.split(",");
-                    for (int i = 0; i < times.length; i++)
-                        snap =
-                                Math.max(
-                                        snap,
-                                        Math.abs(plan.boundaries[i + 1] - parseTime(times[i]))
-                                                / 1e6);
-                    note += String.format(Locale.US, "\nLargest cut adjustment  %.2f s", snap);
+                if (plan.estimated) {
+                    note += "\nEstimated · cut points snap to keyframes on export";
+                } else {
+                    if (mode == 0 || mode == 2)
+                        note +=
+                                String.format(
+                                        Locale.US, "\nLargest variation from average  %.2f s", worst);
+                    if (mode == 3) {
+                        double snap = 0;
+                        String[] times = value.split(",");
+                        for (int i = 0; i < times.length; i++)
+                            snap =
+                                    Math.max(
+                                            snap,
+                                            Math.abs(plan.boundaries[i + 1] - parseTime(times[i]))
+                                                    / 1e6);
+                        note += String.format(Locale.US, "\nLargest cut adjustment  %.2f s", snap);
+                    }
                 }
                 previewNote.setText(note);
             } catch (NumberFormatException failure) {
@@ -467,6 +569,13 @@ public final class MainActivity extends Activity {
                         && !SplitService.running);
     }
 
+    static long[] parseCuts(String value) {
+        String[] parts = value.split(",", -1);
+        long[] cuts = new long[parts.length];
+        for (int i = 0; i < parts.length; i++) cuts[i] = parseTime(parts[i]);
+        return cuts;
+    }
+
     static long parseTime(String value) {
         String[] fields = value.trim().split(":", -1);
         if (fields.length > 3 || value.trim().isEmpty()) throw new NumberFormatException();
@@ -486,6 +595,8 @@ public final class MainActivity extends Activity {
     private void showTimes() {
         if (plan == null) return;
         StringBuilder times = new StringBuilder();
+        if (plan.estimated)
+            times.append("Estimated times (snap to keyframes on export)\n\n");
         for (int i = 0; i < plan.count(); i++)
             times.append(
                     String.format(
@@ -500,7 +611,7 @@ public final class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.addView(view);
         new AlertDialog.Builder(this)
-                .setTitle("Clip times")
+                .setTitle(plan.estimated ? "Estimated clip times" : "Clip times")
                 .setView(scroll)
                 .setPositiveButton("Done", null)
                 .show();
@@ -514,6 +625,42 @@ public final class MainActivity extends Activity {
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                         != android.content.pm.PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 20);
+        long available = availableOutputBytes(folder);
+        if (source != null
+                && source.bytes > 0
+                && available > 0
+                && available < Math.round(source.bytes * 1.05)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Low storage space")
+                    .setMessage(
+                            "Available space ("
+                                    + size(available)
+                                    + ") may not be enough for another copy of "
+                                    + size(source.bytes)
+                                    + ".")
+                    .setPositiveButton("Continue anyway", (d, w) -> startExport())
+                    .setNegativeButton("Cancel", null)
+                    .show();
+            return;
+        }
+        startExport();
+    }
+
+    private long availableOutputBytes(Uri tree) {
+        try {
+            String docId = DocumentsContract.getTreeDocumentId(tree);
+            if (docId != null && docId.startsWith("primary:")) {
+                StatFs stat =
+                        new StatFs(Environment.getExternalStorageDirectory().getPath());
+                return stat.getAvailableBytes();
+            }
+        } catch (Exception ignored) {
+        }
+        return -1;
+    }
+
+    private void startExport() {
+        if (plan == null || folder == null || starting || SplitService.running) return;
         starting = true;
         job.edit()
                 .putString("state", "running")
@@ -525,11 +672,21 @@ public final class MainActivity extends Activity {
                 .putString("name", source.name)
                 .commit();
         try {
-            startForegroundService(
+            Intent intent =
                     new Intent(this, SplitService.class)
                             .putExtra("input", input.toString())
                             .putExtra("folder", folder.toString())
-                            .putExtra("boundaries", plan.boundaries));
+                            .putExtra("mode", mode);
+            if (!plan.estimated && source.hasKeys()) {
+                intent.putExtra("boundaries", plan.boundaries);
+            } else {
+                String value = parameter.getText().toString().trim();
+                if (mode == 0) intent.putExtra("count", Integer.parseInt(value));
+                else if (mode == 1) intent.putExtra("durationSec", Double.parseDouble(value));
+                else if (mode == 2) intent.putExtra("sizeMb", Double.parseDouble(value));
+                else if (mode == 3) intent.putExtra("cuts", parseCuts(value));
+            }
+            startForegroundService(intent);
             showExport(false, false);
         } catch (Exception failure) {
             starting = false;
@@ -611,6 +768,8 @@ public final class MainActivity extends Activity {
                     text("You can keep using your phone while this saves.", 12, 0xffA4BFAE);
             background.setGravity(Gravity.CENTER);
             add(content, background, 12);
+            handler.removeCallbacks(elapsedTick);
+            handler.post(elapsedTick);
         }
     }
 
@@ -619,25 +778,23 @@ public final class MainActivity extends Activity {
         if (SplitService.running) starting = false;
         if ("done".equals(state) && !"done".equals(screen)) {
             starting = false;
+            handler.removeCallbacks(elapsedTick);
             showExport(true, "running".equals(screen));
         } else if ("running".equals(state)
                 && ("running".equals(screen) || SplitService.running || starting)) {
-            if (!"running".equals(screen)) showExport(false, false);
+            if (!"running".equals(screen)) {
+                showExport(false, false);
+                handler.removeCallbacks(elapsedTick);
+                handler.post(elapsedTick);
+            }
             int percent = job.getInt("percent", 0);
             artwork.progress(percent);
-            exportStatus.setText(job.getString("message", "Saving your clips"));
-            exportTime.setText(
-                    elapsed(
-                                    Math.max(
-                                            0,
-                                            (System.currentTimeMillis()
-                                                            - job.getLong(
-                                                                    "started",
-                                                                    System.currentTimeMillis()))
-                                                    / 1000))
-                            + " elapsed");
+            String msg = job.getString("message", "Saving your clips");
+            exportStatus.setText(percent > 0 ? msg + " (" + percent + "%)" : msg);
+            updateElapsedText();
         } else if (("error".equals(state) || "cancelled".equals(state)) && !state.equals(lastJob)) {
             starting = false;
+            handler.removeCallbacks(elapsedTick);
             if (!"editor".equals(screen)) {
                 showEditor();
                 if (source == null && input != null) inspect();
@@ -645,6 +802,20 @@ public final class MainActivity extends Activity {
             error.setText(job.getString("message", "Export stopped"));
         }
         lastJob = state;
+    }
+
+    private void updateElapsedText() {
+        if (exportTime == null) return;
+        exportTime.setText(
+                elapsed(
+                                Math.max(
+                                        0,
+                                        (System.currentTimeMillis()
+                                                        - job.getLong(
+                                                                "started",
+                                                                System.currentTimeMillis()))
+                                                / 1000))
+                        + " elapsed");
     }
 
     private int completedCount() {
@@ -661,6 +832,7 @@ public final class MainActivity extends Activity {
         input = null;
         source = null;
         plan = null;
+        thumbBitmap = null;
         inspecting = false;
         showEditor();
     }
@@ -717,6 +889,14 @@ public final class MainActivity extends Activity {
                                     & (Intent.FLAG_GRANT_READ_URI_PERMISSION
                                             | Intent.FLAG_GRANT_WRITE_URI_PERMISSION));
             if (request == 10) {
+                if (input != null && !input.equals(chosen) && !input.equals(folder)) {
+                    try {
+                        getContentResolver()
+                                .releasePersistableUriPermission(
+                                        input, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    } catch (Exception ignored) {
+                    }
+                }
                 input = chosen;
                 error.setText("");
                 inspect();
@@ -725,6 +905,8 @@ public final class MainActivity extends Activity {
                 folder = chosen;
                 config.edit().putString("folder", folder.toString()).apply();
                 folderLabel.setText(folderName(folder));
+                folderLabel.setTextColor(INK);
+                folderLabel.setTypeface(null, Typeface.BOLD);
                 folderButton.setText("Change output folder");
                 updatePlan();
             }
@@ -757,15 +939,24 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (input != null) outState.putString("input", input.toString());
+    }
+
+    @Override
     protected void onResume() {
         super.onResume();
-        handler.post(poll);
+        job.registerOnSharedPreferenceChangeListener(jobListener);
+        refreshJob();
+        if ("running".equals(screen)) handler.post(elapsedTick);
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        handler.removeCallbacks(poll);
+        job.unregisterOnSharedPreferenceChangeListener(jobListener);
+        handler.removeCallbacks(elapsedTick);
     }
 
     @Override
@@ -833,7 +1024,8 @@ public final class MainActivity extends Activity {
         view.setMinimumHeight(dp(52));
         view.setPadding(dp(12), dp(4), dp(12), dp(4));
         int background = filled ? (dark ? LIME : GREEN) : (dark ? 0xff2A5143 : 0xffEDF2E9);
-        view.setBackground(shape(background, 14, 0));
+        int border = (!filled && !dark) ? 0xffDCE4DA : 0;
+        view.setBackground(shape(background, 14, border));
         view.setBackgroundTintList(
                 new ColorStateList(
                         new int[][] {new int[] {android.R.attr.state_enabled}, new int[] {}},

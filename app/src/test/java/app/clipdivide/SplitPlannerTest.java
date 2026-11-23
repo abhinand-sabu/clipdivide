@@ -91,6 +91,78 @@ public class SplitPlannerTest {
         assertTrue("Expected improvement for uneven keyframe layouts", improved > 0);
     }
 
+    @Test
+    public void vbrSizeSplitUsesKeyBytesWhenAvailable() throws Exception {
+        SplitEngine.Source source = new SplitEngine.Source();
+        source.durationUs = 100_000_000L;
+        source.bytes = 100_000_000L;
+        // First half of duration has 80% of bytes (VBR)
+        source.keys.add(0L);
+        source.keyBytes.add(0L);
+        source.keys.add(25_000_000L);
+        source.keyBytes.add(50_000_000L);
+        source.keys.add(50_000_000L);
+        source.keyBytes.add(80_000_000L);
+        source.keys.add(75_000_000L);
+        source.keyBytes.add(90_000_000L);
+        source.totalVideoBytes = 100_000_000L;
+        SplitEngine.Plan plan = SplitEngine.planSize(source, 50);
+        assertEquals(2, plan.count());
+        assertEquals(25_000_000L, plan.boundaries[1]);
+    }
+
+    @Test
+    public void estimatedPlansWorkWithoutKeyframes() throws Exception {
+        SplitEngine.Source source = new SplitEngine.Source();
+        source.durationUs = 120_000_000L;
+        source.bytes = 250_000_000L;
+
+        SplitEngine.Plan byCount = SplitEngine.estimateCount(source, 3);
+        assertTrue(byCount.estimated);
+        assertArrayEquals(
+                new long[] {0, 40_000_000L, 80_000_000L, 120_000_000L}, byCount.boundaries);
+
+        SplitEngine.Plan byDur = SplitEngine.estimateDuration(source, 50);
+        assertTrue(byDur.estimated);
+        assertArrayEquals(
+                new long[] {0, 50_000_000L, 100_000_000L, 120_000_000L}, byDur.boundaries);
+
+        SplitEngine.Plan bySize = SplitEngine.estimateSize(source, 100);
+        assertTrue(bySize.estimated);
+        assertEquals(3, bySize.count());
+
+        SplitEngine.Plan byCuts =
+                SplitEngine.estimateCuts(source, new long[] {30_000_000L, 90_000_000L});
+        assertTrue(byCuts.estimated);
+        assertArrayEquals(
+                new long[] {0, 30_000_000L, 90_000_000L, 120_000_000L}, byCuts.boundaries);
+    }
+
+    @Test
+    public void parseTimeHandlesValidAndInvalidFormats() {
+        assertEquals(30_000_000L, MainActivity.parseTime("30"));
+        assertEquals(90_500_000L, MainActivity.parseTime("01:30.5"));
+        assertEquals(3_661_000_000L, MainActivity.parseTime("1:01:01"));
+        assertArrayEquals(
+                new long[] {30_000_000L, 80_000_000L},
+                MainActivity.parseCuts("00:30, 01:20"));
+        assertThrows(NumberFormatException.class, () -> MainActivity.parseTime(""));
+        assertThrows(NumberFormatException.class, () -> MainActivity.parseTime("1:60"));
+        assertThrows(NumberFormatException.class, () -> MainActivity.parseTime("1:2:3:4"));
+        assertThrows(NumberFormatException.class, () -> MainActivity.parseTime("-5"));
+        assertThrows(NumberFormatException.class, () -> MainActivity.parseCuts("00:30,"));
+    }
+
+    @Test
+    public void sourceCacheKeyIsDeterministicAndHex() {
+        String key1 = SourceCache.keyFor("content://media/external/video/123");
+        String key2 = SourceCache.keyFor("content://media/external/video/123");
+        String key3 = SourceCache.keyFor("content://media/external/video/456");
+        assertEquals(16, key1.length());
+        assertEquals(key1, key2);
+        assertNotEquals(key1, key3);
+    }
+
     private static SplitEngine.Source source(long duration, long interval) {
         SplitEngine.Source source = new SplitEngine.Source();
         source.durationUs = duration;
